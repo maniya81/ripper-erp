@@ -1,0 +1,57 @@
+name: Deploy Backend to Azure Container Apps
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-deploy.yml"
+
+env:
+  AZURE_RESOURCE_GROUP: ripper-erp-rg
+  AZURE_CONTAINER_APP: ripper-backend
+  AZURE_CONTAINER_ENV: ripper-env
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build and push Docker image
+        run: |
+          cd backend
+          az acr build \
+            --registry ${{ secrets.AZURE_REGISTRY_NAME }} \
+            --image ripper-backend:${{ github.sha }} \
+            --image ripper-backend:latest \
+            --file ../docker/Dockerfile.backend \
+            ../
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.AZURE_CONTAINER_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --image ${{ secrets.AZURE_REGISTRY_NAME }}.azurecr.io/ripper-backend:${{ github.sha }} \
+            --set-env-vars \
+              DATABASE_URL=secretref:database-url \
+              SECRET_KEY=secretref:secret-key \
+              FACEBOOK_APP_ID=secretref:facebook-app-id \
+              FACEBOOK_APP_SECRET=secretref:facebook-app-secret \
+              FACEBOOK_PAGE_ACCESS_TOKEN=secretref:facebook-token \
+              WEBHOOK_VERIFY_TOKEN=secretref:webhook-token
+
+      - name: Run database migrations
+        run: |
+          az containerapp exec \
+            --name ${{ env.AZURE_CONTAINER_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --command "alembic upgrade head"
